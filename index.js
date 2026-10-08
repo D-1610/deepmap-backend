@@ -1,21 +1,30 @@
 const express = require('express');
 const cors = require('cors');
+const admin = require('firebase-admin');
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
 // ============================================
-// DATA STORAGE (in-memory, hilang saat restart)
+// FIREBASE ADMIN INIT
+// ============================================
+if (!admin.apps.length) {
+    admin.initializeApp({
+        credential: admin.credential.cert({
+            projectId: process.env.FIREBASE_PROJECT_ID,
+            clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+            privateKey: (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n')
+        })
+    });
+}
+const db = admin.firestore();
+
+// ============================================
+// DATA STORAGE (in-memory, untuk legacy auth)
 // ============================================
 const users = [];
 const locations = [];
-const devices = [];
-
-// ============================================
-// DATA STORAGE — COMMAND (BARU)
-// ============================================
-const commands = [];
 
 // ============================================
 // HEALTH CHECK
@@ -84,102 +93,66 @@ app.get('/api/location/:userId', (req, res) => {
 // ============================================
 
 // Child kirim device info + lokasi
-app.post('/api/device', (req, res) => {
-    const {
-        deviceId,
-        manufacturer,
-        model,
-        androidVersion,
-        latitude,
-        longitude,
-        timestamp
-    } = req.body;
+app.post('/api/device', async (req, res) => {
+    try {
+        const {
+            deviceId,
+            manufacturer,
+            model,
+            androidVersion,
+            latitude,
+            longitude,
+            timestamp
+        } = req.body;
 
-    if (!deviceId) {
-        return res.status(400).json({ status: 'error', message: 'deviceId wajib' });
+        if (!deviceId) {
+            return res.status(400).json({ status: 'error', message: 'deviceId wajib' });
+        }
+
+        const data = {
+            deviceId,
+            manufacturer,
+            model,
+            androidVersion,
+            latitude,
+            longitude,
+            timestamp,
+            updatedAt: Date.now()
+        };
+
+        await db.collection('devices').doc(deviceId).set(data, { merge: true });
+
+        res.json({ status: 'success', message: 'Device tersimpan' });
+    } catch (e) {
+        console.error('POST /api/device error:', e);
+        res.status(500).json({ status: 'error', message: e.message });
     }
-
-    const data = {
-        deviceId,
-        manufacturer,
-        model,
-        androidVersion,
-        latitude,
-        longitude,
-        timestamp
-    };
-
-    const idx = devices.findIndex(d => d.deviceId === deviceId);
-    if (idx >= 0) {
-        devices[idx] = data;
-    } else {
-        devices.push(data);
-    }
-
-    res.json({ status: 'success', message: 'Device tersimpan' });
 });
 
 // Parent lihat semua device
-app.get('/api/devices', (req, res) => {
-    res.json({ total: devices.length, data: devices });
+app.get('/api/devices', async (req, res) => {
+    try {
+        const snapshot = await db.collection('devices').get();
+        const data = snapshot.docs.map(doc => doc.data());
+        res.json({ total: data.length, data });
+    } catch (e) {
+        console.error('GET /api/devices error:', e);
+        res.status(500).json({ status: 'error', message: e.message });
+    }
 });
 
 // Parent lihat 1 device
-app.get('/api/device/:deviceId', (req, res) => {
-    const dev = devices.find(d => d.deviceId === req.params.deviceId);
-    if (!dev) {
-        return res.status(404).json({ status: 'error', message: 'Device tidak ditemukan' });
+app.get('/api/device/:deviceId', async (req, res) => {
+    try {
+        const doc = await db.collection('devices').doc(req.params.deviceId).get();
+        if (!doc.exists) {
+            return res.status(404).json({ status: 'error', message: 'Device tidak ditemukan' });
+        }
+        res.json({ status: 'success', data: doc.data() });
+    } catch (e) {
+        console.error('GET /api/device error:', e);
+        res.status(500).json({ status: 'error', message: e.message });
     }
-    res.json({ status: 'success', data: dev });
-});
-
-// ============================================
-// COMMAND (BARU) — Lockscreen & Message
-// ============================================
-
-// Parent kirim command ke HP anak
-app.post('/api/command', (req, res) => {
-    const { deviceId, type, message, lock } = req.body;
-
-    if (!deviceId || !type) {
-        return res.status(400).json({ status: 'error', message: 'deviceId & type wajib' });
-    }
-
-    // type: "message" | "lock" | "lock_message"
-    const cmd = {
-        id: Date.now().toString(),
-        deviceId,
-        type,
-        message: message || '',
-        lock: lock === true,
-        timestamp: Date.now(),
-        executed: false
-    };
-
-    commands.push(cmd);
-
-    console.log(`[COMMAND] ${deviceId} → ${type}: ${message}`);
-
-    res.json({ status: 'success', command: cmd });
-});
-
-// HP anak polling command baru
-app.get('/api/command/:deviceId', (req, res) => {
-    const { deviceId } = req.params;
-
-    // Ambil command yg belum executed untuk device ini
-    const pending = commands.filter(
-        c => c.deviceId === deviceId && !c.executed
-    );
-
-    if (pending.length === 0) {
-        return res.json({ status: 'success', data: [] });
-    }
-
-    // Tandai sebagai executed (biar gak diulang)
-    pending.forEach(c => { c.executed = true; });
-
-    res.json({ status: 'success', data: pending });
 });
 
 // ============================================
