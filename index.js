@@ -59,13 +59,13 @@ app.post('/api/auth/login', (req, res) => {
 // ============================================
 // LOCATION (untuk user login — legacy)
 // ============================================
-app.post('/api/location/legacy', (req, res) => {
+app.post('/api/location', (req, res) => {
     const { userId, latitude, longitude, accuracy, timestamp } = req.body;
     locations.push({ userId, latitude, longitude, accuracy, timestamp });
     res.json({ status: 'success', message: 'Lokasi tersimpan' });
 });
 
-app.get('/api/location/legacy/:userId', (req, res) => {
+app.get('/api/location/:userId', (req, res) => {
     const { userId } = req.params;
     const last = locations.filter(l => l.userId === userId).pop();
     if (!last) {
@@ -78,10 +78,7 @@ app.get('/api/location/legacy/:userId', (req, res) => {
 // DEVICE (untuk DeepMap Child & Parent)
 // ============================================
 
-// --------------------------------------------
-// POST /api/device — DARI HP ANAK
-// Simpan device info + lokasi + pairing code
-// --------------------------------------------
+// Child kirim device info + lokasi
 app.post('/api/device', (req, res) => {
     const {
         deviceId,
@@ -90,22 +87,12 @@ app.post('/api/device', (req, res) => {
         androidVersion,
         latitude,
         longitude,
-        timestamp,
-        // ============================================
-        // TAMBAHAN: pairing info dari HP anak
-        // ============================================
-        pairingCode,
-        secret
+        timestamp
     } = req.body;
 
     if (!deviceId) {
         return res.status(400).json({ status: 'error', message: 'deviceId wajib' });
     }
-
-    // Normalisasi kode (buang strip, uppercase)
-    const cleanCode = pairingCode
-        ? pairingCode.replace('-', '').toUpperCase()
-        : null;
 
     const data = {
         deviceId,
@@ -114,10 +101,7 @@ app.post('/api/device', (req, res) => {
         androidVersion,
         latitude,
         longitude,
-        timestamp,
-        pairingCode: cleanCode,
-        secret: secret || null,
-        updatedAt: timestamp || Date.now()
+        timestamp
     };
 
     const idx = devices.findIndex(d => d.deviceId === deviceId);
@@ -130,58 +114,12 @@ app.post('/api/device', (req, res) => {
     res.json({ status: 'success', message: 'Device tersimpan' });
 });
 
-// --------------------------------------------
-// GET /api/location?code=XXXX — DARI HP ORTU
-// Cari device berdasarkan pairing code
-// --------------------------------------------
-app.get('/api/location', (req, res) => {
-    // Ambil query param ?code=
-    const rawCode = req.query.code || '';
-    const code = rawCode.replace('-', '').toUpperCase();
-
-    if (!code) {
-        return res.status(400).json({
-            status: 'error',
-            message: 'Parameter code wajib diisi'
-        });
-    }
-
-    // Cari device yg pairingCode-nya match
-    const dev = devices.find(d => d.pairingCode === code);
-
-    if (!dev) {
-        return res.status(404).json({
-            status: 'error',
-            message: 'Device belum terhubung atau kode salah'
-        });
-    }
-
-    // Kirim data ke parent
-    res.json({
-        status: 'success',
-        deviceId: dev.deviceId,
-        deviceModel: `${dev.manufacturer || ''} ${dev.model || ''}`.trim(),
-        androidVersion: dev.androidVersion,
-        lat: dev.latitude,
-        lng: dev.longitude,
-        battery: null,
-        updatedAt: dev.updatedAt || dev.timestamp,
-        pairingCode: dev.pairingCode
-    });
-});
-
-// --------------------------------------------
-// GET /api/devices — DARI HP ORTU (legacy)
-// Lihat semua device (untuk debug)
-// --------------------------------------------
+// Parent lihat semua device
 app.get('/api/devices', (req, res) => {
     res.json({ total: devices.length, data: devices });
 });
 
-// --------------------------------------------
-// GET /api/device/:deviceId — DARI HP ORTU
-// Lihat 1 device by deviceId
-// --------------------------------------------
+// Parent lihat 1 device
 app.get('/api/device/:deviceId', (req, res) => {
     const dev = devices.find(d => d.deviceId === req.params.deviceId);
     if (!dev) {
